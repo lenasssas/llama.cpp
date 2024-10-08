@@ -11,14 +11,14 @@
 "
 
 let s:default_config = {
+    \ 'endpoint':     'http://127.0.0.1:8012/infill',
     \ 'prefix_lines': 32,
     \ 'suffix_lines': 32,
-    \ 'endpoint': 'http://127.0.0.1:8012/infill',
-    \ 'stop': ["\n"],
-    \ 'n_predict': 64,
-    \ 'n_probs': 3,
-    \ 'temperature': 0.1
-    \}
+    \ 'n_predict':    64,
+    \ 'n_probs':      3,
+    \ 'temperature':  0.1,
+    \ 'stop':         ["\n"]
+    \ }
 
 let g:llama_config = get(g:, 'llama_config', s:default_config)
 
@@ -45,14 +45,16 @@ function! llama#fim() abort
         \ 'prompt':         "",
         \ 'input_prefix':   l:prefix,
         \ 'input_suffix':   l:suffix,
-        "\ 'stop':           g:llama_config.stop,
+       "\ 'stop':           g:llama_config.stop,
         \ 'n_predict':      g:llama_config.n_predict,
-        "\ 'n_probs':        g:llama_config.n_probs,
+       "\ 'n_probs':        g:llama_config.n_probs,
         \ 'penalty_last_n': 0,
         \ 'temperature':    g:llama_config.temperature,
-        \ 'top_k':          10,
+        \ 'top_k':          5,
+        \ 'infill_p':       0.20,
+        \ 'infill_p_eog':   0.001,
         \ 'stream':         v:false,
-        \ 'samplers':       ["top_k"]
+        \ 'samplers':       ["top_k", "infill"]
         \ })
 
     " request completion from the server

@@ -889,6 +889,8 @@ struct server_context {
         slot.sparams.tfs_z             = json_value(data, "tfs_z",             default_sparams.tfs_z);
         slot.sparams.typ_p             = json_value(data, "typical_p",         default_sparams.typ_p);
         slot.sparams.temp              = json_value(data, "temperature",       default_sparams.temp);
+        slot.sparams.infill_p          = json_value(data, "infill_p",          default_sparams.infill_p);
+        slot.sparams.infill_p_eog      = json_value(data, "infill_p_eog",      default_sparams.infill_p_eog);
         slot.sparams.dynatemp_range    = json_value(data, "dynatemp_range",    default_sparams.dynatemp_range);
         slot.sparams.dynatemp_exponent = json_value(data, "dynatemp_exponent", default_sparams.dynatemp_exponent);
         slot.sparams.penalty_last_n    = json_value(data, "repeat_last_n",     default_sparams.penalty_last_n);
@@ -1236,6 +1238,8 @@ struct server_context {
             {"min_p",                     slot.sparams.min_p},
             {"tfs_z",                     slot.sparams.tfs_z},
             {"typical_p",                 slot.sparams.typ_p},
+            {"infill_p",                  slot.sparams.infill_p},
+            {"infill_p_eog",              slot.sparams.infill_p_eog},
             {"repeat_last_n",             slot.sparams.penalty_last_n},
             {"repeat_penalty",            slot.sparams.penalty_repeat},
             {"presence_penalty",          slot.sparams.penalty_present},
@@ -1964,55 +1968,57 @@ struct server_context {
                         slot.t_start_process_prompt = ggml_time_us();
                         slot.t_start_generation = 0;
 
-                        if (slot.cmpl_type == SERVER_TASK_CMPL_TYPE_INFILL) {
-                            const bool add_bos = llama_add_bos_token(model);
+                        switch (slot.cmpl_type) {
+                            case SERVER_TASK_CMPL_TYPE_NORMAL:
+                            case SERVER_TASK_CMPL_TYPE_EMBEDDING:
+                                {
+                                    prompt_tokens = tokenize(slot.prompt, system_prompt.empty(), true); // add BOS if there isn't system prompt
+                                } break;
+                            case SERVER_TASK_CMPL_TYPE_RERANK:
+                                {
+                                    // require slot.prompt to be array of 2 strings
+                                    if (!slot.prompt.is_array() || slot.prompt.size() != 2) {
+                                        SLT_ERR(slot, "%s", "invalid prompt for rerank task\n");
+                                        slot.release();
+                                        send_error(slot, "invalid prompt for rerank task", ERROR_TYPE_INVALID_REQUEST);
+                                        continue;
+                                    }
 
-                            auto prefix_tokens = tokenize(slot.params.input_prefix, false, false);
-                            auto suffix_tokens = tokenize(slot.params.input_suffix, false, false);
+                                    // prompt: [BOS]query[EOS][SEP]doc[EOS]
+                                    prompt_tokens.clear();
+                                    prompt_tokens.push_back(llama_token_bos(model));
+                                    {
+                                        const auto part = tokenize(slot.prompt[0], false, false);
+                                        prompt_tokens.insert(prompt_tokens.end(), part.begin(), part.end());
+                                    }
+                                    prompt_tokens.push_back(llama_token_eos(model));
+                                    prompt_tokens.push_back(llama_token_sep(model));
+                                    {
+                                        const auto part = tokenize(slot.prompt[1], false, false);
+                                        prompt_tokens.insert(prompt_tokens.end(), part.begin(), part.end());
+                                    }
+                                    prompt_tokens.push_back(llama_token_eos(model));
+                                } break;
+                            case SERVER_TASK_CMPL_TYPE_INFILL:
+                                {
+                                    auto prefix_tokens = tokenize(slot.params.input_prefix, false, false);
+                                    auto suffix_tokens = tokenize(slot.params.input_suffix, false, false);
 
-                            prefix_tokens.insert(prefix_tokens.begin(), llama_token_fim_pre(model));
-                            suffix_tokens.insert(suffix_tokens.begin(), llama_token_fim_suf(model));
+                                    prefix_tokens.insert(prefix_tokens.begin(), llama_token_fim_pre(model));
+                                    suffix_tokens.insert(suffix_tokens.begin(), llama_token_fim_suf(model));
 
-                            auto embd_inp = params.spm_infill ? suffix_tokens : prefix_tokens;
-                            auto embd_end = params.spm_infill ? prefix_tokens : suffix_tokens;
+                                    auto embd_inp = params.spm_infill ? suffix_tokens : prefix_tokens;
+                                    auto embd_end = params.spm_infill ? prefix_tokens : suffix_tokens;
 
-                            if (add_bos) {
-                                embd_inp.insert(embd_inp.begin(), llama_token_bos(model));
-                            }
+                                    if (llama_add_bos_token(model)) {
+                                        embd_inp.insert(embd_inp.begin(), llama_token_bos(model));
+                                    }
 
-                            embd_inp.insert(embd_inp.end(), embd_end.begin(), embd_end.end());
+                                    embd_inp.insert(embd_inp.end(), embd_end.begin(), embd_end.end());
+                                    embd_inp.push_back(llama_token_fim_mid(model));
 
-                            const llama_token middle_token = llama_token_fim_mid(model);
-                            if (middle_token >= 0) {
-                                embd_inp.push_back(middle_token);
-                            }
-
-                            prompt_tokens = embd_inp;
-                        } else if (slot.cmpl_type == SERVER_TASK_CMPL_TYPE_RERANK) {
-                            // require slot.prompt to be array of 2 strings
-                            if (!slot.prompt.is_array() || slot.prompt.size() != 2) {
-                                SLT_ERR(slot, "%s", "invalid prompt for rerank task\n");
-                                slot.release();
-                                send_error(slot, "invalid prompt for rerank task", ERROR_TYPE_INVALID_REQUEST);
-                                continue;
-                            }
-
-                            // prompt: [BOS]query[EOS][SEP]doc[EOS]
-                            prompt_tokens.clear();
-                            prompt_tokens.push_back(llama_token_bos(model));
-                            {
-                                const auto part = tokenize(slot.prompt[0], false, false);
-                                prompt_tokens.insert(prompt_tokens.end(), part.begin(), part.end());
-                            }
-                            prompt_tokens.push_back(llama_token_eos(model));
-                            prompt_tokens.push_back(llama_token_sep(model));
-                            {
-                                const auto part = tokenize(slot.prompt[1], false, false);
-                                prompt_tokens.insert(prompt_tokens.end(), part.begin(), part.end());
-                            }
-                            prompt_tokens.push_back(llama_token_eos(model));
-                        } else {
-                            prompt_tokens = tokenize(slot.prompt, system_prompt.empty(), true); // add BOS if there isn't system prompt
+                                    prompt_tokens = std::move(embd_inp);
+                                } break;
                         }
 
                         slot.n_past = 0;
