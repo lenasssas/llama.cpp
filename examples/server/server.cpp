@@ -1785,6 +1785,8 @@ struct server_context {
                     }
                     slot->cache_tokens.resize(token_count);
 
+                    slot->prompt = string_format("[restored %d tokens from file]", token_count);
+
                     const int64_t t_end = ggml_time_us();
                     const double t_restore_ms = (t_end - t_start) / 1000.0;
 
